@@ -50,14 +50,17 @@ async function main() {
   await session.connect();
 
   // 4. Escuchar solicitudes de nuevo QR desde Flutter
+  // Inicializamos con el tiempo de arranque del servidor para ignorar cualquier
+  // requestNewQr antiguo que quedó en Firestore de sesiones anteriores.
   const db = getDb();
-  let lastQrRequest = null;
+  const serverStartMs = Date.now();
+  let lastQrRequest = serverStartMs;
   db.doc('whatsapp_session/status').onSnapshot((snap) => {
     if (!snap.exists) return;
     const requestTs = snap.data()?.requestNewQr;
     if (!requestTs) return;
     const tsMs = requestTs.toMillis?.() ?? 0;
-    if (lastQrRequest === tsMs) return;
+    if (tsMs <= lastQrRequest) return; // ignorar solicitudes previas al arranque
     lastQrRequest = tsMs;
     logger.info('Solicitud de nuevo QR recibida desde Flutter — reconectando...');
     session.forceNewQr().catch((e) => logger.error({ err: e.message }, 'Error al forzar QR'));
