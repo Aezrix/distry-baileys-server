@@ -110,6 +110,7 @@ export class SessionManager {
         qrString: null,
         servidorActivo: true,
         numeroConectado: numero,
+        errorLogout: null,
       });
 
       this._startHeartbeat();
@@ -146,15 +147,13 @@ export class SessionManager {
         this.reconnectTimer = setTimeout(() => this.connect(), delay);
       } else if (reason === DisconnectReason.loggedOut) {
         this.loggedOutAttempts++;
-        this.logger.error({ loggedOutAttempts: this.loggedOutAttempts }, 'Sesión cerrada por logout');
+        this.logger.error({ loggedOutAttempts: this.loggedOutAttempts }, 'Sesión rechazada por WhatsApp (401) — esperando acción manual');
 
         // Limpiar archivos de sesión inválidos
         this._clearSessionFiles();
 
-        // Siempre limpiar credenciales inválidas y pedir QR nuevo
-        // Esperar un poco más en cada intento para no spamear WhatsApp
-        const waitMs = Math.min(this.loggedOutAttempts * 5_000, 30_000);
-        this.logger.info({ waitMs, loggedOutAttempts: this.loggedOutAttempts }, 'Esperando antes de generar nuevo QR...');
+        // NO reconectar automáticamente — WhatsApp rechazó las credenciales.
+        // Reconectar en loop causa ban. El admin debe presionar "Solicitar QR" en Flutter.
         await this._updateSessionStatus({
           sesionValida: false,
           servidorActivo: true,
@@ -162,11 +161,8 @@ export class SessionManager {
           qrString: null,
           qrImagenBase64: null,
           numeroConectado: null,
+          errorLogout: `Sesión rechazada (${this.loggedOutAttempts}x). Presiona "Solicitar QR" para reintentar.`,
         });
-        setTimeout(async () => {
-          await this._updateSessionStatus({ qrPendiente: true });
-          this.connect();
-        }, waitMs);
       } else {
         this.logger.error({ attempts: this.reconnectAttempts }, 'Máximo de reconexiones alcanzado');
         await this._updateSessionStatus({ sesionValida: false, servidorActivo: false });
