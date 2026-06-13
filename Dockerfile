@@ -13,6 +13,7 @@ RUN npm install --omit=dev
 
 COPY . .
 
+# cache-bust: 2026-06-13
 ENV NODE_ENV=production
 
 # SESSION_DIR se sobreescribe en Railway con la ruta del Volume montado
