@@ -85,12 +85,15 @@ export class SessionManager {
     if (qr) {
       this.logger.info('QR generado — escanear con el número secundario');
       qrcode.generate(qr, { small: true });
+      const base64 = await this._qrToBase64(qr);
       await this._updateSessionStatus({
         sesionValida: false,
         qrPendiente: true,
-        qrImagenBase64: await this._qrToBase64(qr),
+        qrString: qr,
+        qrImagenBase64: base64,
         servidorActivo: true,
       });
+      this.logger.info({ hasBase64: !!base64, qrLength: qr.length }, 'QR guardado en Firestore');
     }
 
     if (connection === 'open') {
@@ -104,6 +107,7 @@ export class SessionManager {
         sesionValida: true,
         qrPendiente: false,
         qrImagenBase64: null,
+        qrString: null,
         servidorActivo: true,
         numeroConectado: numero,
       });
