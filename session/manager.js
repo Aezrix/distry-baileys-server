@@ -21,6 +21,7 @@ export class SessionManager {
     this.logger = logger;
     this.sock = null;
     this.isConnected = false;
+    this.isConnecting = false;
     this.heartbeatTimer = null;
     this.reconnectTimer = null;
     this.reconnectAttempts = 0;
@@ -31,9 +32,6 @@ export class SessionManager {
     this.MAX_LOGOUT_ATTEMPTS = 3;
   }
 
-  /**
-   * Registra callback que se llama cuando la sesión está lista para enviar mensajes.
-   */
   onReady(fn) {
     this.onReadyCallbacks.push(fn);
   }
@@ -43,6 +41,20 @@ export class SessionManager {
   }
 
   async connect() {
+    // Evitar múltiples connect() en paralelo (ej. dos timers disparando a la vez)
+    if (this.isConnecting) {
+      this.logger.warn('connect() ya está en progreso — ignorando llamada duplicada');
+      return;
+    }
+    this.isConnecting = true;
+    try {
+      await this._doConnect();
+    } finally {
+      this.isConnecting = false;
+    }
+  }
+
+  async _doConnect() {
     if (!existsSync(this.sessionDir)) {
       mkdirSync(this.sessionDir, { recursive: true });
     }
@@ -50,7 +62,6 @@ export class SessionManager {
     const { state, saveCreds } = await useMultiFileAuthState(this.sessionDir);
     const { version } = await fetchLatestWaWebVersion();
 
-    // Diagnóstico: muestra cuántos archivos hay en el Volume antes de conectar
     const sessionFiles = readdirSync(this.sessionDir);
     this.logger.info(
       { files: sessionFiles.length, registered: !!state.creds.me, dir: this.sessionDir },
@@ -58,6 +69,10 @@ export class SessionManager {
     );
 
     this.logger.info({ version }, 'Iniciando Baileys');
+
+    // Silenciar correctamente los logs internos de Baileys
+    const baileysSilentLog = this.logger.child({ module: 'baileys' });
+    baileysSilentLog.level = 'silent';
 
     this.sock = makeWASocket({
       version,
@@ -67,7 +82,7 @@ export class SessionManager {
         keys: makeCacheableSignalKeyStore(state.keys, this.logger),
       },
       printQRInTerminal: false,
-      logger: this.logger.child({ module: 'baileys', level: 'silent' }),
+      logger: baileysSilentLog,
       generateHighQualityLinkPreview: false,
       syncFullHistory: false,
       markOnlineOnConnect: false,
@@ -111,7 +126,7 @@ export class SessionManager {
       this.isConnected = true;
       this.reconnectAttempts = 0;
       this.loggedOutAttempts = 0;
-      const numero = this.sock.user?.id?.split(':')[0] ?? null;
+      const numero = this.sock?.user?.id?.split(':')[0] ?? null;
       this.logger.info({ numero }, 'Sesión WhatsApp conectada');
 
       await this._updateSessionStatus({
@@ -135,6 +150,12 @@ export class SessionManager {
       this.isConnected = false;
       this._stopHeartbeat();
 
+      // Cancelar cualquier reconexión pendiente para evitar duplicados
+      if (this.reconnectTimer) {
+        clearTimeout(this.reconnectTimer);
+        this.reconnectTimer = null;
+      }
+
       const reason = new Boom(lastDisconnect?.error)?.output?.statusCode;
       const shouldReconnect = reason !== DisconnectReason.loggedOut;
       const errorMsg = lastDisconnect?.error?.message ?? 'unknown';
@@ -143,6 +164,13 @@ export class SessionManager {
 
       for (const fn of this.onDisconnectedCallbacks) {
         try { fn(reason); } catch (e) { this.logger.error(e); }
+      }
+
+      // Limpiar listeners del socket viejo para evitar eventos duplicados en reconexión
+      const oldSock = this.sock;
+      this.sock = null;
+      if (oldSock) {
+        try { oldSock.ev.removeAllListeners(); } catch (_) {}
       }
 
       if (shouldReconnect && this.reconnectAttempts < this.MAX_RECONNECT_ATTEMPTS) {
@@ -159,13 +187,13 @@ export class SessionManager {
         this.reconnectTimer = setTimeout(() => this.connect(), delay);
       } else if (reason === DisconnectReason.loggedOut) {
         this.loggedOutAttempts++;
-        this.logger.error({ loggedOutAttempts: this.loggedOutAttempts }, 'Sesión rechazada por WhatsApp (401) — esperando acción manual');
+        this.logger.error(
+          { loggedOutAttempts: this.loggedOutAttempts },
+          'Sesión rechazada por WhatsApp (401) — esperando acción manual'
+        );
 
-        // Limpiar archivos de sesión inválidos
         this._clearSessionFiles();
 
-        // NO reconectar automáticamente — WhatsApp rechazó las credenciales.
-        // Reconectar en loop causa ban. El admin debe presionar "Solicitar QR" en Flutter.
         await this._updateSessionStatus({
           sesionValida: false,
           servidorActivo: true,
@@ -184,15 +212,23 @@ export class SessionManager {
 
   async forceNewQr() {
     this.logger.info('Forzando nuevo QR — limpiando sesión y reconectando');
+
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+
     if (this.sock) {
       try { this.sock.ev.removeAllListeners(); } catch (_) {}
       try { await this.sock.ws?.close(); } catch (_) {}
       this.sock = null;
     }
+
     this.isConnected = false;
     this._stopHeartbeat();
     this._clearSessionFiles();
     this.reconnectAttempts = 0;
+    this.isConnecting = false; // Resetear flag para permitir el nuevo connect
     setTimeout(() => this.connect(), 1000);
   }
 
@@ -248,7 +284,6 @@ export class SessionManager {
         mkdirSync(this.sessionDir, { recursive: true });
         return;
       }
-      // Borrar contenido interno sin tocar el directorio raíz (Volume mount point)
       const entries = readdirSync(this.sessionDir);
       for (const entry of entries) {
         rmSync(join(this.sessionDir, entry), { recursive: true, force: true });
