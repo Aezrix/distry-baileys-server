@@ -7,7 +7,7 @@ import {
   Browsers,
 } from '@whiskeysockets/baileys';
 import { Boom } from '@hapi/boom';
-import { existsSync, mkdirSync } from 'fs';
+import { existsSync, mkdirSync, rmSync } from 'fs';
 import { resolve } from 'path';
 import qrcode from 'qrcode-terminal';
 import QRCode from 'qrcode';
@@ -27,6 +27,8 @@ export class SessionManager {
     this.MAX_RECONNECT_ATTEMPTS = 10;
     this.onReadyCallbacks = [];
     this.onDisconnectedCallbacks = [];
+    this.loggedOutAttempts = 0;
+    this.MAX_LOGOUT_ATTEMPTS = 3;
   }
 
   /**
@@ -52,7 +54,7 @@ export class SessionManager {
 
     this.sock = makeWASocket({
       version,
-      browser: Browsers.macOS('Safari'),
+      browser: Browsers.macOS('Chrome'),
       auth: {
         creds: state.creds,
         keys: makeCacheableSignalKeyStore(state.keys, this.logger),
@@ -62,7 +64,10 @@ export class SessionManager {
       generateHighQualityLinkPreview: false,
       syncFullHistory: false,
       markOnlineOnConnect: false,
-      retryRequestDelayMs: 350,
+      retryRequestDelayMs: 2000,
+      keepAliveIntervalMs: 15_000,
+      connectTimeoutMs: 60_000,
+      qrTimeout: 60_000,
     });
 
     this.sock.ev.on('creds.update', saveCreds);
@@ -91,6 +96,7 @@ export class SessionManager {
     if (connection === 'open') {
       this.isConnected = true;
       this.reconnectAttempts = 0;
+      this.loggedOutAttempts = 0;
       const numero = this.sock.user?.id?.split(':')[0] ?? null;
       this.logger.info({ numero }, 'Sesión WhatsApp conectada');
 
@@ -135,15 +141,40 @@ export class SessionManager {
 
         this.reconnectTimer = setTimeout(() => this.connect(), delay);
       } else if (reason === DisconnectReason.loggedOut) {
-        this.logger.error('Sesión cerrada por logout — se requiere escanear QR nuevamente');
-        await this._updateSessionStatus({
-          sesionValida: false,
-          servidorActivo: true,
-          qrPendiente: true,
-          numeroConectado: null,
-        });
-        // Re-conectar para mostrar nuevo QR
-        setTimeout(() => this.connect(), 3000);
+        this.loggedOutAttempts++;
+        this.logger.error({ loggedOutAttempts: this.loggedOutAttempts }, 'Sesión cerrada por logout');
+
+        // Limpiar archivos de sesión inválidos
+        this._clearSessionFiles();
+
+        if (this.loggedOutAttempts <= this.MAX_LOGOUT_ATTEMPTS) {
+          // Esperar más tiempo entre intentos para evitar ban
+          const waitMs = this.loggedOutAttempts * 30_000;
+          this.logger.info({ waitMs }, 'Esperando antes de generar nuevo QR...');
+          await this._updateSessionStatus({
+            sesionValida: false,
+            servidorActivo: true,
+            qrPendiente: false,
+            numeroConectado: null,
+          });
+          setTimeout(async () => {
+            await this._updateSessionStatus({ qrPendiente: true });
+            this.connect();
+          }, waitMs);
+        } else {
+          this.logger.error('Demasiados logouts — esperando 10 minutos antes de reintentar');
+          await this._updateSessionStatus({
+            sesionValida: false,
+            servidorActivo: true,
+            qrPendiente: false,
+            numeroConectado: null,
+          });
+          setTimeout(() => {
+            this.loggedOutAttempts = 0;
+            this._updateSessionStatus({ qrPendiente: true });
+            this.connect();
+          }, 10 * 60_000);
+        }
       } else {
         this.logger.error({ attempts: this.reconnectAttempts }, 'Máximo de reconexiones alcanzado');
         await this._updateSessionStatus({ sesionValida: false, servidorActivo: false });
@@ -194,6 +225,18 @@ export class SessionManager {
       }, { merge: true });
     } catch (e) {
       this.logger.warn({ err: e.message }, 'No se pudo actualizar estado de sesión');
+    }
+  }
+
+  _clearSessionFiles() {
+    try {
+      if (existsSync(this.sessionDir)) {
+        rmSync(this.sessionDir, { recursive: true, force: true });
+        mkdirSync(this.sessionDir, { recursive: true });
+        this.logger.info('Archivos de sesión limpiados');
+      }
+    } catch (e) {
+      this.logger.warn({ err: e.message }, 'No se pudieron limpiar archivos de sesión');
     }
   }
 
