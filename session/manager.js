@@ -199,7 +199,7 @@ export class SessionManager {
 
   async _qrToBase64(qrData) {
     try {
-      return await QRCode.toDataURL(qrData, { width: 300, margin: 2 });
+      return await QRCode.toDataURL(qrData, { width: 600, margin: 2, color: { dark: '#000000', light: '#ffffff' } });
     } catch {
       return null;
     }
