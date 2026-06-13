@@ -186,6 +186,20 @@ export class SessionManager {
     }
   }
 
+  async forceNewQr() {
+    this.logger.info('Forzando nuevo QR — limpiando sesión y reconectando');
+    if (this.sock) {
+      try { this.sock.ev.removeAllListeners(); } catch (_) {}
+      try { await this.sock.ws?.close(); } catch (_) {}
+      this.sock = null;
+    }
+    this.isConnected = false;
+    this._stopHeartbeat();
+    this._clearSessionFiles();
+    this.reconnectAttempts = 0;
+    setTimeout(() => this.connect(), 1000);
+  }
+
   async sendMessage(jid, content) {
     if (!this.isConnected || !this.sock) {
       throw new Error('Sesión no disponible — no se puede enviar mensaje');

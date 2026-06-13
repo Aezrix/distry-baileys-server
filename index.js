@@ -1,6 +1,6 @@
 import 'dotenv/config';
 import pino from 'pino';
-import { initFirebase } from './firebase/admin.js';
+import { initFirebase, getDb } from './firebase/admin.js';
 import { subscribeConfig } from './config/reader.js';
 import { SessionManager } from './session/manager.js';
 import { procesarCola } from './queue/processor.js';
@@ -48,6 +48,20 @@ async function main() {
   });
 
   await session.connect();
+
+  // 4. Escuchar solicitudes de nuevo QR desde Flutter
+  const db = getDb();
+  let lastQrRequest = null;
+  db.doc('whatsapp_session/status').onSnapshot((snap) => {
+    if (!snap.exists) return;
+    const requestTs = snap.data()?.requestNewQr;
+    if (!requestTs) return;
+    const tsMs = requestTs.toMillis?.() ?? 0;
+    if (lastQrRequest === tsMs) return;
+    lastQrRequest = tsMs;
+    logger.info('Solicitud de nuevo QR recibida desde Flutter — reconectando...');
+    session.forceNewQr().catch((e) => logger.error({ err: e.message }, 'Error al forzar QR'));
+  });
 
   // ── Shutdown graceful ─────────────────────────────────────────────────────
   process.on('SIGTERM', () => gracefulShutdown(session));
