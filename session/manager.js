@@ -50,6 +50,13 @@ export class SessionManager {
     const { state, saveCreds } = await useMultiFileAuthState(this.sessionDir);
     const { version } = await fetchLatestWaWebVersion();
 
+    // Diagnóstico: muestra cuántos archivos hay en el Volume antes de conectar
+    const sessionFiles = readdirSync(this.sessionDir);
+    this.logger.info(
+      { files: sessionFiles.length, registered: !!state.creds.me, dir: this.sessionDir },
+      'Cargando sesión'
+    );
+
     this.logger.info({ version }, 'Iniciando Baileys');
 
     this.sock = makeWASocket({
@@ -65,12 +72,16 @@ export class SessionManager {
       syncFullHistory: false,
       markOnlineOnConnect: false,
       retryRequestDelayMs: 2000,
-      keepAliveIntervalMs: 15_000,
+      keepAliveIntervalMs: 25_000,
       connectTimeoutMs: 60_000,
       qrTimeout: 60_000,
     });
 
-    this.sock.ev.on('creds.update', saveCreds);
+    this.sock.ev.on('creds.update', async () => {
+      await saveCreds();
+      const saved = readdirSync(this.sessionDir);
+      this.logger.info({ files: saved.length }, 'Credenciales guardadas en Volume');
+    });
 
     this.sock.ev.on('connection.update', async (update) => {
       await this._handleConnectionUpdate(update);
@@ -126,8 +137,9 @@ export class SessionManager {
 
       const reason = new Boom(lastDisconnect?.error)?.output?.statusCode;
       const shouldReconnect = reason !== DisconnectReason.loggedOut;
+      const errorMsg = lastDisconnect?.error?.message ?? 'unknown';
 
-      this.logger.warn({ reason, shouldReconnect }, 'Conexión cerrada');
+      this.logger.warn({ reason, errorMsg, shouldReconnect }, 'Conexión cerrada');
 
       for (const fn of this.onDisconnectedCallbacks) {
         try { fn(reason); } catch (e) { this.logger.error(e); }
