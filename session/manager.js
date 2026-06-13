@@ -7,8 +7,8 @@ import {
   Browsers,
 } from '@whiskeysockets/baileys';
 import { Boom } from '@hapi/boom';
-import { existsSync, mkdirSync, rmSync } from 'fs';
-import { resolve } from 'path';
+import { existsSync, mkdirSync, rmSync, readdirSync } from 'fs';
+import { resolve, join } from 'path';
 import qrcode from 'qrcode-terminal';
 import QRCode from 'qrcode';
 import { getDb, getTimestamp } from '../firebase/admin.js';
@@ -151,34 +151,22 @@ export class SessionManager {
         // Limpiar archivos de sesión inválidos
         this._clearSessionFiles();
 
-        if (this.loggedOutAttempts <= this.MAX_LOGOUT_ATTEMPTS) {
-          // Esperar más tiempo entre intentos para evitar ban
-          const waitMs = this.loggedOutAttempts * 30_000;
-          this.logger.info({ waitMs }, 'Esperando antes de generar nuevo QR...');
-          await this._updateSessionStatus({
-            sesionValida: false,
-            servidorActivo: true,
-            qrPendiente: false,
-            numeroConectado: null,
-          });
-          setTimeout(async () => {
-            await this._updateSessionStatus({ qrPendiente: true });
-            this.connect();
-          }, waitMs);
-        } else {
-          this.logger.error('Demasiados logouts — esperando 10 minutos antes de reintentar');
-          await this._updateSessionStatus({
-            sesionValida: false,
-            servidorActivo: true,
-            qrPendiente: false,
-            numeroConectado: null,
-          });
-          setTimeout(() => {
-            this.loggedOutAttempts = 0;
-            this._updateSessionStatus({ qrPendiente: true });
-            this.connect();
-          }, 10 * 60_000);
-        }
+        // Siempre limpiar credenciales inválidas y pedir QR nuevo
+        // Esperar un poco más en cada intento para no spamear WhatsApp
+        const waitMs = Math.min(this.loggedOutAttempts * 5_000, 30_000);
+        this.logger.info({ waitMs, loggedOutAttempts: this.loggedOutAttempts }, 'Esperando antes de generar nuevo QR...');
+        await this._updateSessionStatus({
+          sesionValida: false,
+          servidorActivo: true,
+          qrPendiente: false,
+          qrString: null,
+          qrImagenBase64: null,
+          numeroConectado: null,
+        });
+        setTimeout(async () => {
+          await this._updateSessionStatus({ qrPendiente: true });
+          this.connect();
+        }, waitMs);
       } else {
         this.logger.error({ attempts: this.reconnectAttempts }, 'Máximo de reconexiones alcanzado');
         await this._updateSessionStatus({ sesionValida: false, servidorActivo: false });
@@ -248,13 +236,18 @@ export class SessionManager {
 
   _clearSessionFiles() {
     try {
-      if (existsSync(this.sessionDir)) {
-        rmSync(this.sessionDir, { recursive: true, force: true });
+      if (!existsSync(this.sessionDir)) {
         mkdirSync(this.sessionDir, { recursive: true });
-        this.logger.info('Archivos de sesión limpiados');
+        return;
       }
+      // Borrar contenido interno sin tocar el directorio raíz (Volume mount point)
+      const entries = readdirSync(this.sessionDir);
+      for (const entry of entries) {
+        rmSync(join(this.sessionDir, entry), { recursive: true, force: true });
+      }
+      this.logger.info({ deleted: entries.length }, 'Archivos de sesión limpiados');
     } catch (e) {
-      this.logger.warn({ err: e.message }, 'No se pudieron limpiar archivos de sesión');
+      this.logger.error({ err: e.message, dir: this.sessionDir }, 'Error limpiando sesión');
     }
   }
 
