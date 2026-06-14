@@ -125,9 +125,15 @@ export async function validarEnvio(item, config, contadorHoy) {
   }
 
   const enviadosCliente = contadorHoy?.porCliente?.[item.clienteId] ?? 0;
-  if (enviadosCliente >= config.limitePorCliente) {
+  // El límite efectivo es el mayor entre limitePorCliente configurado y la
+  // cantidad de horariosDisparo, para que multi-envío diario nunca se bloquee.
+  const limiteEfectivo = Math.max(
+    config.limitePorCliente ?? 1,
+    Array.isArray(config.horariosDisparo) ? config.horariosDisparo.length : 1
+  );
+  if (enviadosCliente >= limiteEfectivo) {
     return fail(
-      `Límite por cliente alcanzado para ${item.clienteId} (${enviadosCliente}/${config.limitePorCliente})`,
+      `Límite por cliente alcanzado para ${item.clienteId} (${enviadosCliente}/${limiteEfectivo})`,
       'bloqueado_limite'
     );
   }
