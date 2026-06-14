@@ -81,23 +81,31 @@ export class SessionManager {
     }
 
     const { state, saveCreds } = await useMultiFileAuthState(this.sessionDir);
-    const { version } = await fetchLatestWaWebVersion();
+
+    // Obtener versión actual de WA Web — si falla usar la última conocida que funciona
+    let version;
+    try {
+      const result = await fetchLatestWaWebVersion();
+      version = result.version;
+      this.logger.info({ version }, 'Versión WA Web obtenida');
+    } catch (e) {
+      version = [2, 3000, 1023254234];
+      this.logger.warn({ version, err: e.message }, 'fetchLatestWaWebVersion falló — usando versión fija');
+    }
 
     const sessionFiles = readdirSync(this.sessionDir);
     this.logger.info(
-      { files: sessionFiles.length, registered: !!state.creds.me, dir: this.sessionDir },
+      { files: sessionFiles.length, registered: !!state.creds.me, version, dir: this.sessionDir },
       'Cargando sesión'
     );
 
-    this.logger.info({ version }, 'Iniciando Baileys');
-
-    // Silenciar correctamente los logs internos de Baileys
+    // Mostrar solo warnings/errors de Baileys — suficiente para diagnosticar sin spam
     const baileysSilentLog = this.logger.child({ module: 'baileys' });
-    baileysSilentLog.level = 'silent';
+    baileysSilentLog.level = 'warn';
 
     this.sock = makeWASocket({
       version,
-      browser: Browsers.macOS('Chrome'),
+      browser: Browsers.ubuntu('Chrome'),
       auth: {
         creds: state.creds,
         keys: makeCacheableSignalKeyStore(state.keys, this.logger),
@@ -109,8 +117,9 @@ export class SessionManager {
       markOnlineOnConnect: false,
       retryRequestDelayMs: 2000,
       keepAliveIntervalMs: 25_000,
-      connectTimeoutMs: 60_000,
-      qrTimeout: 60_000,
+      connectTimeoutMs: 90_000,
+      defaultQueryTimeoutMs: 60_000,
+      qrTimeout: 120_000,
     });
 
     this.sock.ev.on('creds.update', async () => {
@@ -126,7 +135,12 @@ export class SessionManager {
   }
 
   async _handleConnectionUpdate(update) {
-    const { connection, lastDisconnect, qr } = update;
+    const { connection, lastDisconnect, qr, isNewLogin, receivedPendingNotifications } = update;
+
+    this.logger.info(
+      { connection: connection ?? 'null', hasQr: !!qr, isNewLogin, receivedPendingNotifications },
+      '[WA] connection.update'
+    );
 
     if (qr) {
       this.logger.info('QR generado — escanear con el número secundario');
@@ -179,11 +193,23 @@ export class SessionManager {
         this.reconnectTimer = null;
       }
 
-      const reason = new Boom(lastDisconnect?.error)?.output?.statusCode;
+      const boom = new Boom(lastDisconnect?.error);
+      const reason = boom?.output?.statusCode;
       const shouldReconnect = reason !== DisconnectReason.loggedOut;
       const errorMsg = lastDisconnect?.error?.message ?? 'unknown';
+      const boomPayload = boom?.output?.payload ?? {};
+      const rawError = lastDisconnect?.error;
 
-      this.logger.warn({ reason, errorMsg, shouldReconnect }, 'Conexión cerrada');
+      this.logger.warn({
+        reason,
+        errorMsg,
+        shouldReconnect,
+        boomStatus: boomPayload.statusCode,
+        boomError: boomPayload.error,
+        boomMessage: boomPayload.message,
+        rawStack: rawError?.stack?.split('\n')[0],
+        DisconnectReasonValues: DisconnectReason,
+      }, '[WA] Conexión cerrada — detalle completo');
 
       for (const fn of this.onDisconnectedCallbacks) {
         try { fn(reason); } catch (e) { this.logger.error(e); }

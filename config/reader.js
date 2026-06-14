@@ -16,6 +16,7 @@ const DEFAULTS = {
   limiteHorario: 2,
   limitePorCliente: 1,
   ventanaAntiDuplicados: 24,
+  antiDuplicadosActivo: true,
   horaInicio: 7,
   horaFin: 20,
   delayMinMs: 2000,

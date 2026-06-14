@@ -1,6 +1,6 @@
 {
   "name": "distry-baileys-server",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Servidor de recordatorios WhatsApp para DistrY Créditos usando Baileys",
   "main": "index.js",
   "type": "module",

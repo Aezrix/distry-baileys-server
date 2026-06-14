@@ -85,22 +85,24 @@ export async function validarEnvio(item, config, contadorHoy) {
   }
 
   // ── 8. Sin envío reciente (anti-duplicados en logs) ───────────────────────
-  const ventanaHoras = config.ventanaAntiDuplicados ?? 24;
-  const ventanaMs = ventanaHoras * 60 * 60 * 1000;
-  const desde = new Date(Date.now() - ventanaMs);
+  if (config.antiDuplicadosActivo !== false) {
+    const ventanaHoras = config.ventanaAntiDuplicados ?? 24;
+    const ventanaMs = ventanaHoras * 60 * 60 * 1000;
+    const desde = new Date(Date.now() - ventanaMs);
 
-  const logDuplicado = await db.collection('whatsapp_logs')
-    .where('hashId', '==', item.hashId)
-    .where('tipo', 'in', ['enviado', 'simulado'])
-    .where('fecha', '>=', desde)
-    .limit(1)
-    .get();
+    const logDuplicado = await db.collection('whatsapp_logs')
+      .where('hashId', '==', item.hashId)
+      .where('tipo', 'in', ['enviado', 'simulado'])
+      .where('fecha', '>=', desde)
+      .limit(1)
+      .get();
 
-  if (!logDuplicado.empty) {
-    return fail(
-      `Ya existe envío reciente con hashId ${item.hashId} en las últimas ${ventanaHoras}h`,
-      'bloqueado_duplicado'
-    );
+    if (!logDuplicado.empty) {
+      return fail(
+        `Ya existe envío reciente con hashId ${item.hashId} en las últimas ${ventanaHoras}h`,
+        'bloqueado_duplicado'
+      );
+    }
   }
 
   // ── 9. Límite diario ──────────────────────────────────────────────────────

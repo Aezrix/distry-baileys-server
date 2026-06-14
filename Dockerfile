@@ -11,9 +11,9 @@ WORKDIR /app
 COPY package*.json ./
 RUN npm install --omit=dev
 
+# cache-bust: 2026-06-14
 COPY . .
 
-# cache-bust: 2026-06-13
 ENV NODE_ENV=production
 
 # SESSION_DIR se sobreescribe en Railway con la ruta del Volume montado
