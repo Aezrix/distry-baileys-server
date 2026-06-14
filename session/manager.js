@@ -115,9 +115,7 @@ export class SessionManager {
 
     this.sock.ev.on('creds.update', async () => {
       await saveCreds();
-      await saveSessionBackup(this.sessionDir);
-      const saved = readdirSync(this.sessionDir);
-      this.logger.info({ files: saved.length }, 'Credenciales guardadas y backup en Firestore actualizado');
+      // Backup solo después de conexión completa (no durante el handshake)
     });
 
     this.sock.ev.on('connection.update', async (update) => {
@@ -163,6 +161,8 @@ export class SessionManager {
       });
 
       this._startHeartbeat();
+      // Guardar backup una sola vez cuando la sesión queda completamente establecida
+      await saveSessionBackup(this.sessionDir).catch(() => {});
 
       for (const fn of this.onReadyCallbacks) {
         try { fn(this.sock); } catch (e) { this.logger.error(e); }
