@@ -147,10 +147,19 @@ export async function validarEnvio(item, config, contadorHoy) {
  * Si no, usa la ventana horaInicio-horaFin como fallback.
  */
 export function dentroDeVentanaHoraria(config) {
-  const hora = new Date().getHours();
+  const ahora = new Date();
+  const horaActual = ahora.getHours();
+  const minutoActual = ahora.getMinutes();
   const horarios = config.horariosDisparo;
+  const minutos = config.minutosDisparo;
+
   if (Array.isArray(horarios) && horarios.length > 0) {
-    return horarios.includes(hora);
+    return horarios.some((h, i) => {
+      const m = Array.isArray(minutos) && i < minutos.length ? minutos[i] : 0;
+      // Activo desde la hora:minuto configurada hasta 59 minutos después
+      if (horaActual !== h) return false;
+      return minutoActual >= m;
+    });
   }
-  return hora >= (config.horaInicio ?? 7) && hora <= (config.horaFin ?? 20);
+  return horaActual >= (config.horaInicio ?? 7) && horaActual <= (config.horaFin ?? 20);
 }
