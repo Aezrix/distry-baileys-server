@@ -60,15 +60,33 @@ async function main() {
   const db = getDb();
   const serverStartMs = Date.now();
   let lastQrRequest = serverStartMs;
+  let lastReconnectRequest = serverStartMs;
+
   db.doc('whatsapp_session/status').onSnapshot((snap) => {
     if (!snap.exists) return;
-    const requestTs = snap.data()?.requestNewQr;
-    if (!requestTs) return;
-    const tsMs = requestTs.toMillis?.() ?? 0;
-    if (tsMs <= lastQrRequest) return; // ignorar solicitudes previas al arranque
-    lastQrRequest = tsMs;
-    logger.info('Solicitud de nuevo QR recibida desde Flutter — reconectando...');
-    session.forceNewQr().catch((e) => logger.error({ err: e.message }, 'Error al forzar QR'));
+    const data = snap.data();
+
+    // Solicitud de nuevo QR (borra sesión)
+    const qrTs = data?.requestNewQr;
+    if (qrTs) {
+      const tsMs = qrTs.toMillis?.() ?? 0;
+      if (tsMs > lastQrRequest) {
+        lastQrRequest = tsMs;
+        logger.info('Solicitud de nuevo QR recibida — forzando reconexión limpia');
+        session.forceNewQr().catch((e) => logger.error({ err: e.message }, 'Error al forzar QR'));
+      }
+    }
+
+    // Solicitud de reconexión con sesión existente (sin borrar ni pedir QR)
+    const reconnectTs = data?.requestReconnect;
+    if (reconnectTs) {
+      const tsMs = reconnectTs.toMillis?.() ?? 0;
+      if (tsMs > lastReconnectRequest) {
+        lastReconnectRequest = tsMs;
+        logger.info('Solicitud de reconexión con sesión existente recibida');
+        session.reconnectExisting().catch((e) => logger.error({ err: e.message }, 'Error al reconectar'));
+      }
+    }
   });
 
   // ── Shutdown graceful ─────────────────────────────────────────────────────

@@ -25,6 +25,7 @@ export class SessionManager {
     this.isConnecting = false;
     this.heartbeatTimer = null;
     this.reconnectTimer = null;
+    this.backupTimer = null;
     this.reconnectAttempts = 0;
     this.MAX_RECONNECT_ATTEMPTS = 10;
     this.onReadyCallbacks = [];
@@ -124,7 +125,9 @@ export class SessionManager {
 
     this.sock.ev.on('creds.update', async () => {
       await saveCreds();
-      // Backup solo después de conexión completa (no durante el handshake)
+      // Actualizar backup en Firestore cada vez que cambian las credenciales
+      // (throttle: máx 1 vez por minuto para no saturar Firestore)
+      this._scheduleBackup();
     });
 
     this.sock.ev.on('connection.update', async (update) => {
@@ -281,6 +284,42 @@ export class SessionManager {
     this.reconnectAttempts = 0;
     this.isConnecting = false; // Resetear flag para permitir el nuevo connect
     setTimeout(() => this.connect(), 1000);
+  }
+
+  // Reconectar usando credenciales existentes — SIN borrar sesión ni pedir QR
+  async reconnectExisting() {
+    this.logger.info('Reconectando con sesión existente (sin QR)...');
+
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+    if (this.sock) {
+      try { this.sock.ev.removeAllListeners(); } catch (_) {}
+      try { await this.sock.ws?.close(); } catch (_) {}
+      this.sock = null;
+    }
+
+    this.isConnected = false;
+    this._stopHeartbeat();
+    this.reconnectAttempts = 0;
+    this.isConnecting = false;
+    // No borra los archivos de sesión — intenta reconectar con los existentes
+    setTimeout(() => this.connect(), 500);
+  }
+
+  // Throttle backup: guarda como máximo una vez por minuto
+  _scheduleBackup() {
+    if (this.backupTimer) return;
+    this.backupTimer = setTimeout(async () => {
+      this.backupTimer = null;
+      if (this.isConnected) {
+        await saveSessionBackup(this.sessionDir).catch(
+          (e) => this.logger.warn({ err: e.message }, 'Backup programado falló')
+        );
+        this.logger.debug('Backup de sesión actualizado');
+      }
+    }, 60_000); // 1 minuto
   }
 
   async sendMessage(jid, content) {
