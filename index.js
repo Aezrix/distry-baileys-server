@@ -1,4 +1,5 @@
 import 'dotenv/config';
+import { createServer } from 'http';
 import pino from 'pino';
 import { initFirebase, getDb } from './firebase/admin.js';
 import { subscribeConfig } from './config/reader.js';
@@ -13,6 +14,10 @@ const logger = pino({
     ? { target: 'pino-pretty', options: { colorize: true, translateTime: 'SYS:standard' } }
     : undefined,
 });
+
+// ── Health check HTTP (Railway requiere un proceso escuchando en $PORT) ────────
+const PORT = process.env.PORT || 3000;
+createServer((req, res) => res.writeHead(200).end('OK')).listen(PORT);
 
 // ── Estado global del servidor ────────────────────────────────────────────────
 let pollingTimer = null;
