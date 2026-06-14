@@ -12,6 +12,7 @@ import { resolve, join } from 'path';
 import qrcode from 'qrcode-terminal';
 import QRCode from 'qrcode';
 import { getDb, getTimestamp } from '../firebase/admin.js';
+import { saveSessionBackup, restoreSessionBackup, clearSessionBackup } from '../firebase/session-backup.js';
 
 const SESSION_STATUS_DOC = 'whatsapp_session/status';
 
@@ -69,6 +70,15 @@ export class SessionManager {
       errorLogout: null,
     }).catch(() => {});
 
+    // Restaurar sesión desde Firestore si el directorio está vacío (ej. Railway reinició)
+    const existingFiles = existsSync(this.sessionDir) ? readdirSync(this.sessionDir) : [];
+    if (!existingFiles.length) {
+      const restored = await restoreSessionBackup(this.sessionDir);
+      if (restored) {
+        this.logger.info({ files: restored }, 'Sesión restaurada desde backup Firestore — sin necesidad de nuevo QR');
+      }
+    }
+
     const { state, saveCreds } = await useMultiFileAuthState(this.sessionDir);
     const { version } = await fetchLatestWaWebVersion();
 
@@ -104,8 +114,9 @@ export class SessionManager {
 
     this.sock.ev.on('creds.update', async () => {
       await saveCreds();
+      await saveSessionBackup(this.sessionDir);
       const saved = readdirSync(this.sessionDir);
-      this.logger.info({ files: saved.length }, 'Credenciales guardadas en Volume');
+      this.logger.info({ files: saved.length }, 'Credenciales guardadas y backup en Firestore actualizado');
     });
 
     this.sock.ev.on('connection.update', async (update) => {
@@ -203,6 +214,7 @@ export class SessionManager {
         );
 
         this._clearSessionFiles();
+        await clearSessionBackup();
 
         await this._updateSessionStatus({
           sesionValida: false,
