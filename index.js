@@ -61,6 +61,8 @@ async function main() {
   const serverStartMs = Date.now();
   let lastQrRequest = serverStartMs;
   let lastReconnectRequest = serverStartMs;
+  let lastPairingRequest = serverStartMs;
+  let lastLogoutRequest = serverStartMs;
 
   db.doc('whatsapp_session/status').onSnapshot((snap) => {
     if (!snap.exists) return;
@@ -85,6 +87,29 @@ async function main() {
         lastReconnectRequest = tsMs;
         logger.info('Solicitud de reconexión con sesión existente recibida');
         session.reconnectExisting().catch((e) => logger.error({ err: e.message }, 'Error al reconectar'));
+      }
+    }
+
+    // Solicitud de vinculación por número de teléfono
+    const pairingTs = data?.requestPairingCode;
+    if (pairingTs && data?.pairingPhone) {
+      const tsMs = pairingTs.toMillis?.() ?? 0;
+      if (tsMs > lastPairingRequest) {
+        lastPairingRequest = tsMs;
+        const phone = data.pairingPhone;
+        logger.info({ phone }, 'Solicitud de código de vinculación recibida');
+        session.startPhonePairing(phone).catch((e) => logger.error({ err: e.message }, 'Error al iniciar pairing'));
+      }
+    }
+
+    // Solicitud de cerrar sesión
+    const logoutTs = data?.requestLogout;
+    if (logoutTs) {
+      const tsMs = logoutTs.toMillis?.() ?? 0;
+      if (tsMs > lastLogoutRequest) {
+        lastLogoutRequest = tsMs;
+        logger.info('Solicitud de cerrar sesión recibida');
+        session.logoutSession().catch((e) => logger.error({ err: e.message }, 'Error al cerrar sesión'));
       }
     }
   });

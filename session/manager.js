@@ -32,6 +32,7 @@ export class SessionManager {
     this.onDisconnectedCallbacks = [];
     this.loggedOutAttempts = 0;
     this.MAX_LOGOUT_ATTEMPTS = 3;
+    this.pendingPairingPhone = null;
   }
 
   onReady(fn) {
@@ -61,7 +62,9 @@ export class SessionManager {
       mkdirSync(this.sessionDir, { recursive: true });
     }
 
-    // Limpiar estado colgado de sesión anterior antes de intentar conectar
+    // Limpiar estado colgado de sesión anterior antes de intentar conectar.
+    // Incluye requestReconnect y requestNewQr para que solicitudes de sesiones
+    // previas no vuelvan a dispararse cuando el servidor arranca de nuevo.
     await this._updateSessionStatus({
       servidorActivo: true,
       sesionValida: false,
@@ -70,6 +73,8 @@ export class SessionManager {
       qrImagenBase64: null,
       errorLogout: null,
       errorDesconexion: null,
+      requestReconnect: null,
+      requestNewQr: null,
     }).catch(() => {});
 
     // Restaurar sesión desde Firestore si el directorio está vacío (ej. Railway reinició)
@@ -125,14 +130,28 @@ export class SessionManager {
 
     this.sock.ev.on('creds.update', async () => {
       await saveCreds();
-      // Actualizar backup en Firestore cada vez que cambian las credenciales
-      // (throttle: máx 1 vez por minuto para no saturar Firestore)
       this._scheduleBackup();
     });
 
     this.sock.ev.on('connection.update', async (update) => {
       await this._handleConnectionUpdate(update);
     });
+
+    // Vinculación por número de teléfono (alternativa al QR)
+    if (this.pendingPairingPhone && !state.creds.registered) {
+      const phone = this.pendingPairingPhone;
+      this.pendingPairingPhone = null;
+      setTimeout(async () => {
+        try {
+          const code = await this.sock.requestPairingCode(phone);
+          this.logger.info({ code, phone }, 'Código de vinculación generado');
+          await this._updateSessionStatus({ codigoVinculacion: code });
+        } catch (e) {
+          this.logger.error({ err: e.message }, 'Error al generar código de vinculación');
+          await this._updateSessionStatus({ codigoVinculacion: null, errorDesconexion: 'No se pudo generar el código. Intenta de nuevo.' });
+        }
+      }, 2000);
+    }
 
     return this.sock;
   }
@@ -198,21 +217,9 @@ export class SessionManager {
 
       const boom = new Boom(lastDisconnect?.error);
       const reason = boom?.output?.statusCode;
-      const shouldReconnect = reason !== DisconnectReason.loggedOut;
       const errorMsg = lastDisconnect?.error?.message ?? 'unknown';
-      const boomPayload = boom?.output?.payload ?? {};
-      const rawError = lastDisconnect?.error;
 
-      this.logger.warn({
-        reason,
-        errorMsg,
-        shouldReconnect,
-        boomStatus: boomPayload.statusCode,
-        boomError: boomPayload.error,
-        boomMessage: boomPayload.message,
-        rawStack: rawError?.stack?.split('\n')[0],
-        DisconnectReasonValues: DisconnectReason,
-      }, '[WA] Conexión cerrada — detalle completo');
+      this.logger.warn({ reason, errorMsg }, '[WA] Conexión cerrada');
 
       for (const fn of this.onDisconnectedCallbacks) {
         try { fn(reason); } catch (e) { this.logger.error(e); }
@@ -225,19 +232,28 @@ export class SessionManager {
         try { oldSock.ev.removeAllListeners(); } catch (_) {}
       }
 
-      if (shouldReconnect) {
-        // No auto-reconectar — esperar que el usuario presione "Solicitar nuevo QR"
-        this.logger.info({ reason }, 'Sesión cerrada — esperando acción manual del usuario');
-
-        await this._updateSessionStatus({
-          sesionValida: false,
-          servidorActivo: true,
-          qrPendiente: false,
-          qrString: null,
-          qrImagenBase64: null,
-          errorLogout: `Sesión desconectada (código ${reason}). Presiona "Solicitar nuevo QR" para reconectar.`,
-          errorDesconexion: `Desconectado (código ${reason}).`,
-        });
+      // 515 restartRequired, 408 connectionLost, 428 connectionClosed → auto-reconectar
+      const autoReconnectCodes = [
+        DisconnectReason.restartRequired,  // 515
+        DisconnectReason.connectionLost,   // 408
+        DisconnectReason.connectionClosed, // 428
+        DisconnectReason.timedOut,         // 408
+      ];
+      if (autoReconnectCodes.includes(reason)) {
+        this.reconnectAttempts++;
+        if (this.reconnectAttempts <= this.MAX_RECONNECT_ATTEMPTS) {
+          const delay = Math.min(3000 * this.reconnectAttempts, 30000);
+          this.logger.info({ reason, attempt: this.reconnectAttempts, delay }, 'Auto-reconectando...');
+          await this._updateSessionStatus({ sesionValida: false, servidorActivo: true });
+          this.reconnectTimer = setTimeout(() => this.connect(), delay);
+        } else {
+          this.logger.error({ attempts: this.reconnectAttempts }, 'Máximo de reconexiones alcanzado');
+          await this._updateSessionStatus({
+            sesionValida: false,
+            servidorActivo: true,
+            errorDesconexion: `Sin conexión tras ${this.reconnectAttempts} intentos. Usa "Nuevo QR".`,
+          });
+        }
       } else if (reason === DisconnectReason.loggedOut) {
         this.loggedOutAttempts++;
         this.logger.error(
@@ -258,8 +274,19 @@ export class SessionManager {
           errorLogout: `Sesión rechazada (${this.loggedOutAttempts}x). Presiona "Solicitar QR" para reintentar.`,
         });
       } else {
-        this.logger.error({ attempts: this.reconnectAttempts }, 'Máximo de reconexiones alcanzado');
-        await this._updateSessionStatus({ sesionValida: false, servidorActivo: false });
+        // 403 forbidden, 500 badSession, 411 multideviceMismatch → error manual
+        this.logger.error({ reason }, 'Error permanente — acción manual requerida');
+        this._clearSessionFiles();
+        await clearSessionBackup();
+        await this._updateSessionStatus({
+          sesionValida: false,
+          servidorActivo: true,
+          qrPendiente: false,
+          qrString: null,
+          qrImagenBase64: null,
+          numeroConectado: null,
+          errorLogout: `Sesión inválida (código ${reason}). Usa "Nuevo QR" para vincular de nuevo.`,
+        });
       }
     }
   }
@@ -284,6 +311,42 @@ export class SessionManager {
     this.reconnectAttempts = 0;
     this.isConnecting = false; // Resetear flag para permitir el nuevo connect
     setTimeout(() => this.connect(), 1000);
+  }
+
+  // Vincular por número de teléfono en lugar de QR
+  async startPhonePairing(phoneNumber) {
+    this.logger.info({ phoneNumber }, 'Iniciando vinculación por número de teléfono');
+    this.pendingPairingPhone = phoneNumber;
+    await this._updateSessionStatus({ codigoVinculacion: null, qrPendiente: false });
+    await this.forceNewQr();
+  }
+
+  // Cerrar sesión limpiamente y limpiar todo
+  async logoutSession() {
+    this.logger.info('Cerrando sesión de WhatsApp...');
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+    if (this.sock) {
+      try { await this.sock.logout(); } catch (_) {}
+      try { this.sock.ev.removeAllListeners(); } catch (_) {}
+      this.sock = null;
+    }
+    this.isConnected = false;
+    this._stopHeartbeat();
+    this._clearSessionFiles();
+    await clearSessionBackup();
+    await this._updateSessionStatus({
+      sesionValida: false,
+      qrPendiente: false,
+      qrString: null,
+      qrImagenBase64: null,
+      numeroConectado: null,
+      errorLogout: null,
+      errorDesconexion: null,
+      codigoVinculacion: null,
+    });
   }
 
   // Reconectar usando credenciales existentes — SIN borrar sesión ni pedir QR
