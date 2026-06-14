@@ -158,6 +158,7 @@ export class SessionManager {
         servidorActivo: true,
         numeroConectado: numero,
         errorLogout: null,
+        errorDesconexion: null,
       });
 
       this._startHeartbeat();
@@ -194,18 +195,18 @@ export class SessionManager {
         try { oldSock.ev.removeAllListeners(); } catch (_) {}
       }
 
-      if (shouldReconnect && this.reconnectAttempts < this.MAX_RECONNECT_ATTEMPTS) {
-        this.reconnectAttempts++;
-        const delay = Math.min(5000 * this.reconnectAttempts, 60_000);
-        this.logger.info({ attempt: this.reconnectAttempts, delayMs: delay }, 'Reconectando...');
+      if (shouldReconnect) {
+        // No auto-reconectar — esperar que el usuario presione "Solicitar nuevo QR"
+        this.logger.info({ reason }, 'Sesión cerrada — esperando acción manual del usuario');
 
         await this._updateSessionStatus({
           sesionValida: false,
           servidorActivo: true,
           qrPendiente: false,
+          qrString: null,
+          qrImagenBase64: null,
+          errorDesconexion: `Desconectado (código ${reason}). Presiona "Reconectar" para volver a conectar.`,
         });
-
-        this.reconnectTimer = setTimeout(() => this.connect(), delay);
       } else if (reason === DisconnectReason.loggedOut) {
         this.loggedOutAttempts++;
         this.logger.error(
