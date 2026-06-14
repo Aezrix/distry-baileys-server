@@ -270,7 +270,7 @@ export class SessionManager {
   }
 
   _startHeartbeat() {
-    const intervalMs = parseInt(process.env.HEARTBEAT_INTERVAL_MS ?? '25000');
+    const intervalMs = parseInt(process.env.HEARTBEAT_INTERVAL_MS ?? '120000');
     this.heartbeatTimer = setInterval(async () => {
       try {
         await getDb().doc(SESSION_STATUS_DOC).set({
