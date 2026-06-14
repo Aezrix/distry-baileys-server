@@ -68,6 +68,7 @@ export class SessionManager {
       qrString: null,
       qrImagenBase64: null,
       errorLogout: null,
+      errorDesconexion: null,
     }).catch(() => {});
 
     // Restaurar sesión desde Firestore si el directorio está vacío (ej. Railway reinició)
@@ -205,7 +206,8 @@ export class SessionManager {
           qrPendiente: false,
           qrString: null,
           qrImagenBase64: null,
-          errorDesconexion: `Desconectado (código ${reason}). Presiona "Reconectar" para volver a conectar.`,
+          errorLogout: `Sesión desconectada (código ${reason}). Presiona "Solicitar nuevo QR" para reconectar.`,
+          errorDesconexion: `Desconectado (código ${reason}).`,
         });
       } else if (reason === DisconnectReason.loggedOut) {
         this.loggedOutAttempts++;
