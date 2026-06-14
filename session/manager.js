@@ -59,6 +59,16 @@ export class SessionManager {
       mkdirSync(this.sessionDir, { recursive: true });
     }
 
+    // Limpiar estado colgado de sesión anterior antes de intentar conectar
+    await this._updateSessionStatus({
+      servidorActivo: true,
+      sesionValida: false,
+      qrPendiente: false,
+      qrString: null,
+      qrImagenBase64: null,
+      errorLogout: null,
+    }).catch(() => {});
+
     const { state, saveCreds } = await useMultiFileAuthState(this.sessionDir);
     const { version } = await fetchLatestWaWebVersion();
 
