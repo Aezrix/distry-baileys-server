@@ -136,9 +136,15 @@ export async function validarEnvio(item, config, contadorHoy) {
 }
 
 /**
- * Verifica si la hora actual está dentro de la ventana permitida.
+ * Verifica si la hora actual es un horario de envío permitido.
+ * Si horariosDisparo está configurado, solo envía en esas horas exactas.
+ * Si no, usa la ventana horaInicio-horaFin como fallback.
  */
 export function dentroDeVentanaHoraria(config) {
   const hora = new Date().getHours();
+  const horarios = config.horariosDisparo;
+  if (Array.isArray(horarios) && horarios.length > 0) {
+    return horarios.includes(hora);
+  }
   return hora >= (config.horaInicio ?? 7) && hora <= (config.horaFin ?? 20);
 }

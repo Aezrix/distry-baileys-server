@@ -11,9 +11,9 @@ let realtimeUnsubscribe = null;
 const DEFAULTS = {
   habilitado: false,
   modoSandbox: true,
-  modoActivo: 'fase1',
-  limiteDiario: 5,
-  limiteHorario: 2,
+  modoActivo: 'produccion',
+  limiteDiario: 50,
+  limiteHorario: 10,
   limitePorCliente: 1,
   ventanaAntiDuplicados: 24,
   antiDuplicadosActivo: true,
@@ -21,6 +21,8 @@ const DEFAULTS = {
   horaFin: 20,
   delayMinMs: 2000,
   delayMaxMs: 5000,
+  horariosDisparo: [8],
+  diasSemana: ['lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábado'],
 };
 
 /**
