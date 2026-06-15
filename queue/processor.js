@@ -158,18 +158,44 @@ export async function procesarCola(session, logger) {
 }
 
 /**
- * Lee el siguiente item pendiente de la cola, ordenado por fecha de creación.
+ * Lee el siguiente item pendiente de la cola listo para enviar.
+ * Respeta el slotKey: si un item tiene hora:minuto configurado, espera
+ * hasta que ese momento llegue antes de devolverlo.
+ * Lee hasta 10 items para poder saltar los que aún no es su hora.
  */
 async function leerSiguienteItem() {
   const snap = await getDb()
     .collection(COLA_COL)
     .where('estado', '==', 'pendiente')
     .orderBy('creadoAt', 'asc')
-    .limit(1)
+    .limit(10)
     .get();
 
   if (snap.empty) return null;
 
-  const doc = snap.docs[0];
-  return { hashId: doc.id, ...doc.data() };
+  const ahoraBogota = new Date(Date.now() - 5 * 60 * 60 * 1000);
+  const horaActual = ahoraBogota.getUTCHours();
+  const minutoActual = ahoraBogota.getUTCMinutes();
+
+  for (const doc of snap.docs) {
+    const data = doc.data();
+    const { slotKey } = data;
+
+    // Sin slotKey (manual o formato antiguo): procesar inmediatamente
+    if (!slotKey || slotKey < 100) {
+      return { hashId: doc.id, ...data };
+    }
+
+    // Con slotKey: verificar si ya llegó la hora del slot
+    const slotHora = Math.floor(slotKey / 100);
+    const slotMinuto = slotKey % 100;
+    const slotPaso = horaActual > slotHora || (horaActual === slotHora && minutoActual >= slotMinuto);
+
+    if (slotPaso) {
+      return { hashId: doc.id, ...data };
+    }
+    // Este slot aún no llega, probar el siguiente
+  }
+
+  return null; // Ningún item está listo aún
 }
