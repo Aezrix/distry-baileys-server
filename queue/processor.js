@@ -1,6 +1,6 @@
 import { getDb, getTimestamp } from '../firebase/admin.js';
 import { readConfig } from '../config/reader.js';
-import { validarEnvio, dentroDeVentanaHoraria } from '../validators/chain.js';
+import { validarEnvio } from '../validators/chain.js';
 import { enviarMensaje } from '../sender/baileys.js';
 import { withLock } from '../utils/lock.js';
 import {
@@ -41,23 +41,27 @@ export async function procesarCola(session, logger) {
     return;
   }
 
+  // ── Guard 3: Bloqueo nocturno (11 PM – 5 AM Colombia) ───────────────────
+  // Solo bloquea el horario nocturno. El timing exacto por slot lo maneja
+  // leerSiguienteItem con slotKey, no este guard.
+  {
+    const ahoraBogota = new Date(Date.now() - 5 * 60 * 60 * 1000);
+    const horaActual = ahoraBogota.getUTCHours();
+    if (horaActual >= 23 || horaActual < 5) {
+      logger.debug({ horaActual }, 'Horario nocturno — skip');
+      return;
+    }
+  }
+
   // ── Adquirir lock y procesar ──────────────────────────────────────────────
   const result = await withLock(LOCK_NAME, 'servidor_baileys', async () => {
     const item = await leerSiguienteItem();
     if (!item) {
-      logger.debug('Cola vacía');
+      logger.debug('Cola vacía o ningún slot listo aún');
       return { processed: false };
     }
 
-    // ── Guard 3: Ventana horaria (solo para items automáticos) ────────────
-    // Los envíos manuales (programadoPor starts with 'manual:') siempre pasan.
-    const esManual = item.programadoPor?.startsWith('manual:');
-    if (!esManual && !dentroDeVentanaHoraria(config)) {
-      logger.debug({ horaInicio: config.horaInicio, horaFin: config.horaFin }, 'Fuera de ventana horaria — skip (automático)');
-      return { processed: false };
-    }
-
-    logger.info({ hashId: item.hashId, cliente: item.nombreCliente }, 'Procesando item de cola');
+    logger.info({ hashId: item.hashId, cliente: item.nombreCliente, slotKey: item.slotKey }, 'Procesando item de cola');
 
     // Marcar como "enviando" con transacción (previene doble proceso)
     const db = getDb();
