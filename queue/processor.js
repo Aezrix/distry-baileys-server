@@ -34,12 +34,6 @@ export async function procesarCola(session, logger) {
     return;
   }
 
-  // ── Guard 3: Ventana horaria ──────────────────────────────────────────────
-  if (!dentroDeVentanaHoraria(config)) {
-    logger.debug({ horaInicio: config.horaInicio, horaFin: config.horaFin }, 'Fuera de ventana horaria — skip');
-    return;
-  }
-
   // ── Guard 4: Límite diario ────────────────────────────────────────────────
   const contadorHoy = await leerContadorHoy();
   if ((contadorHoy.totalDia ?? 0) >= config.limiteDiario) {
@@ -52,6 +46,14 @@ export async function procesarCola(session, logger) {
     const item = await leerSiguienteItem();
     if (!item) {
       logger.debug('Cola vacía');
+      return { processed: false };
+    }
+
+    // ── Guard 3: Ventana horaria (solo para items automáticos) ────────────
+    // Los envíos manuales (programadoPor starts with 'manual:') siempre pasan.
+    const esManual = item.programadoPor?.startsWith('manual:');
+    if (!esManual && !dentroDeVentanaHoraria(config)) {
+      logger.debug({ horaInicio: config.horaInicio, horaFin: config.horaFin }, 'Fuera de ventana horaria — skip (automático)');
       return { processed: false };
     }
 
