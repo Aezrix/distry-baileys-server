@@ -126,14 +126,30 @@ function iniciarPolling(session) {
   logger.info({ intervalMs }, 'Polling de cola iniciado');
 
   // Ejecutar inmediatamente una vez al conectar, luego en intervalos
-  ejecutarCiclo(session);
+  ejecutarCicloConCadena(session, intervalMs);
+}
 
-  pollingTimer = setInterval(() => ejecutarCiclo(session), intervalMs);
+/**
+ * Ejecuta un ciclo y, si se procesó un item exitosamente, encadena el siguiente
+ * de inmediato (sin esperar el intervalo completo). Esto asegura que múltiples
+ * mensajes pendientes se envíen en ráfaga dentro de la ventana horaria sin
+ * necesitar esperar 30s entre cada uno.
+ */
+async function ejecutarCicloConCadena(session, intervalMs) {
+  const result = await ejecutarCiclo(session);
+
+  // Si se procesó algo (enviado, omitido, etc.), intentar el siguiente de inmediato
+  if (result?.processed) {
+    setImmediate(() => ejecutarCicloConCadena(session, intervalMs));
+  } else {
+    // Cola vacía o fuera de ventana — esperar el intervalo normal
+    pollingTimer = setTimeout(() => ejecutarCicloConCadena(session, intervalMs), intervalMs);
+  }
 }
 
 function detenerPolling() {
   if (pollingTimer) {
-    clearInterval(pollingTimer);
+    clearTimeout(pollingTimer);
     pollingTimer = null;
     logger.info('Polling detenido');
   }
@@ -142,14 +158,15 @@ function detenerPolling() {
 async function ejecutarCiclo(session) {
   if (procesando) {
     logger.debug('Ciclo anterior aún en progreso — skip');
-    return;
+    return null;
   }
 
   procesando = true;
   try {
-    await procesarCola(session, logger);
+    return await procesarCola(session, logger);
   } catch (err) {
     logger.error({ err }, 'Error no controlado en ciclo de procesamiento');
+    return null;
   } finally {
     procesando = false;
   }
