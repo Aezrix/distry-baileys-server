@@ -124,18 +124,20 @@ export async function validarEnvio(item, config, contadorHoy) {
     );
   }
 
-  const enviadosCliente = contadorHoy?.porCliente?.[item.clienteId] ?? 0;
-  // El límite efectivo es el mayor entre limitePorCliente configurado y la
-  // cantidad de horariosDisparo, para que multi-envío diario nunca se bloquee.
-  const limiteEfectivo = Math.max(
-    config.limitePorCliente ?? 1,
-    Array.isArray(config.horariosDisparo) ? config.horariosDisparo.length : 1
-  );
-  if (enviadosCliente >= limiteEfectivo) {
-    return fail(
-      `Límite por cliente alcanzado para ${item.clienteId} (${enviadosCliente}/${limiteEfectivo})`,
-      'bloqueado_limite'
+  // Envíos manuales no consumen ni revisan el límite por cliente
+  const esManual = item.programadoPor?.startsWith('manual:');
+  if (!esManual) {
+    const enviadosCliente = contadorHoy?.porCliente?.[item.clienteId] ?? 0;
+    const limiteEfectivo = Math.max(
+      config.limitePorCliente ?? 1,
+      Array.isArray(config.horariosDisparo) ? config.horariosDisparo.length : 1
     );
+    if (enviadosCliente >= limiteEfectivo) {
+      return fail(
+        `Límite por cliente alcanzado para ${item.clienteId} (${enviadosCliente}/${limiteEfectivo})`,
+        'bloqueado_limite'
+      );
+    }
   }
 
   return pass();
