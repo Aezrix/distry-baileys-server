@@ -115,7 +115,7 @@ export async function validarEnvio(item, config, contadorHoy) {
   }
 
   // ── 10. Límite horario y por cliente ──────────────────────────────────────
-  const horaActual = new Date().getHours().toString().padStart(2, '0');
+  const horaActual = new Date(Date.now() - 5 * 60 * 60 * 1000).getUTCHours().toString().padStart(2, '0');
   const enviados_esta_hora = contadorHoy?.porHora?.[horaActual] ?? 0;
   if (enviados_esta_hora >= config.limiteHorario) {
     return fail(
@@ -147,11 +147,13 @@ export async function validarEnvio(item, config, contadorHoy) {
  * Verifica si la hora actual es un horario de envío permitido.
  * Si horariosDisparo está configurado, solo envía en esas horas exactas.
  * Si no, usa la ventana horaInicio-horaFin como fallback.
+ *
+ * IMPORTANTE: Railway corre en UTC. Colombia = UTC-5 sin DST.
  */
 export function dentroDeVentanaHoraria(config) {
-  const ahora = new Date();
-  const horaActual = ahora.getHours();
-  const minutoActual = ahora.getMinutes();
+  const ahoraBogota = new Date(Date.now() - 5 * 60 * 60 * 1000);
+  const horaActual = ahoraBogota.getUTCHours();
+  const minutoActual = ahoraBogota.getUTCMinutes();
   const horarios = config.horariosDisparo;
   const minutos = config.minutosDisparo;
 

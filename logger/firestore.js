@@ -23,7 +23,7 @@ export async function registrarLog(campos) {
  */
 export async function registrarEnvioExitoso(item, messageId, esSandbox, fase) {
   const hoy = fechaHoy();
-  const horaActual = new Date().getHours().toString().padStart(2, '0');
+  const horaActual = new Date(Date.now() - 5 * 60 * 60 * 1000).getUTCHours().toString().padStart(2, '0');
   const db = getDb();
 
   const batch = db.batch();
@@ -135,6 +135,6 @@ export async function leerContadorHoy() {
 }
 
 function fechaHoy() {
-  const d = new Date();
-  return `${d.getFullYear()}-${(d.getMonth() + 1).toString().padStart(2, '0')}-${d.getDate().toString().padStart(2, '0')}`;
+  const d = new Date(Date.now() - 5 * 60 * 60 * 1000);
+  return `${d.getUTCFullYear()}-${(d.getUTCMonth() + 1).toString().padStart(2, '0')}-${d.getUTCDate().toString().padStart(2, '0')}`;
 }
