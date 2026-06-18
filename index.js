@@ -130,17 +130,23 @@ function iniciarPolling(session) {
 }
 
 /**
- * Ejecuta un ciclo y, si se procesó un item exitosamente, encadena el siguiente
- * de inmediato (sin esperar el intervalo completo). Esto asegura que múltiples
- * mensajes pendientes se envíen en ráfaga dentro de la ventana horaria sin
- * necesitar esperar 30s entre cada uno.
+ * Ejecuta un ciclo y, si se procesó un item exitosamente, espera un delay
+ * aleatorio entre mensajes para simular comportamiento humano y evitar
+ * restricciones de WhatsApp por mensajería masiva.
  */
 async function ejecutarCicloConCadena(session, intervalMs) {
   const result = await ejecutarCiclo(session);
 
-  // Si se procesó algo (enviado, omitido, etc.), intentar el siguiente de inmediato
-  if (result?.processed) {
-    setImmediate(() => ejecutarCicloConCadena(session, intervalMs));
+  if (result?.processed && result?.enviado) {
+    // Mensaje enviado exitosamente — esperar delay largo entre mensajes
+    const minDelay = parseInt(process.env.INTER_MSG_DELAY_MIN ?? '45000');
+    const maxDelay = parseInt(process.env.INTER_MSG_DELAY_MAX ?? '90000');
+    const delay = Math.floor(Math.random() * (maxDelay - minDelay) + minDelay);
+    logger.info({ delayMs: delay }, 'Esperando entre mensajes para evitar restricciones');
+    pollingTimer = setTimeout(() => ejecutarCicloConCadena(session, intervalMs), delay);
+  } else if (result?.processed) {
+    // Procesado pero no enviado (omitido/sandbox) — delay corto
+    pollingTimer = setTimeout(() => ejecutarCicloConCadena(session, intervalMs), 3000);
   } else {
     // Cola vacía o fuera de ventana — esperar el intervalo normal
     pollingTimer = setTimeout(() => ejecutarCicloConCadena(session, intervalMs), intervalMs);

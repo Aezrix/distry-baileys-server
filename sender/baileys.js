@@ -21,8 +21,8 @@ export async function enviarMensaje(session, telefono, mensaje, config) {
   const jid = toWhatsAppJid(telefono);
 
   // Delay humano aleatorio antes de enviar
-  const delayMin = config.delayMinMs ?? 2000;
-  const delayMax = config.delayMaxMs ?? 5000;
+  const delayMin = config.delayMinMs ?? 8000;
+  const delayMax = config.delayMaxMs ?? 15000;
   const delay = Math.floor(Math.random() * (delayMax - delayMin) + delayMin);
   await sleep(delay);
 
