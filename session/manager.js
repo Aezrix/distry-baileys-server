@@ -26,8 +26,10 @@ export class SessionManager {
     this.heartbeatTimer = null;
     this.reconnectTimer = null;
     this.backupTimer = null;
+    this.connectionWatchdog = null;
+    this.lastSocketActivity = Date.now();
     this.reconnectAttempts = 0;
-    this.MAX_RECONNECT_ATTEMPTS = 10;
+    this.MAX_RECONNECT_ATTEMPTS = 15;
     this.onReadyCallbacks = [];
     this.onDisconnectedCallbacks = [];
     this.loggedOutAttempts = 0;
@@ -122,10 +124,11 @@ export class SessionManager {
       syncFullHistory: false,
       markOnlineOnConnect: false,
       retryRequestDelayMs: 2000,
-      keepAliveIntervalMs: 25_000,
+      keepAliveIntervalMs: 15_000,
       connectTimeoutMs: 90_000,
-      defaultQueryTimeoutMs: 60_000,
+      defaultQueryTimeoutMs: 120_000,
       qrTimeout: 120_000,
+      emitOwnEvents: false,
     });
 
     this.sock.ev.on('creds.update', async () => {
@@ -134,7 +137,17 @@ export class SessionManager {
     });
 
     this.sock.ev.on('connection.update', async (update) => {
+      this.lastSocketActivity = Date.now();
       await this._handleConnectionUpdate(update);
+    });
+
+    // Procesar mensajes entrantes para que WhatsApp no desconecte por inactividad
+    this.sock.ev.on('messages.upsert', () => {
+      this.lastSocketActivity = Date.now();
+    });
+
+    this.sock.ev.on('messages.update', () => {
+      this.lastSocketActivity = Date.now();
     });
 
     // Vinculación por número de teléfono (alternativa al QR)
@@ -197,6 +210,7 @@ export class SessionManager {
       });
 
       this._startHeartbeat();
+      this._startConnectionWatchdog();
       // Guardar backup una sola vez cuando la sesión queda completamente establecida
       await saveSessionBackup(this.sessionDir).catch(() => {});
 
@@ -232,26 +246,26 @@ export class SessionManager {
         try { oldSock.ev.removeAllListeners(); } catch (_) {}
       }
 
-      // 515 restartRequired, 408 connectionLost, 428 connectionClosed → auto-reconectar
-      const autoReconnectCodes = [
-        DisconnectReason.restartRequired,  // 515
-        DisconnectReason.connectionLost,   // 408
-        DisconnectReason.connectionClosed, // 428
-        DisconnectReason.timedOut,         // 408
+      // Reconectar automáticamente para cualquier error que NO sea logout permanente
+      const noReconnectCodes = [
+        DisconnectReason.loggedOut,          // 401 — sesión invalidada por el usuario
       ];
-      if (autoReconnectCodes.includes(reason)) {
+      if (!noReconnectCodes.includes(reason)) {
         this.reconnectAttempts++;
         if (this.reconnectAttempts <= this.MAX_RECONNECT_ATTEMPTS) {
-          const delay = Math.min(3000 * this.reconnectAttempts, 30000);
+          const delay = Math.min(2000 * this.reconnectAttempts, 60000);
           this.logger.info({ reason, attempt: this.reconnectAttempts, delay }, 'Auto-reconectando...');
           await this._updateSessionStatus({ sesionValida: false, servidorActivo: true });
           this.reconnectTimer = setTimeout(() => this.connect(), delay);
         } else {
-          this.logger.error({ attempts: this.reconnectAttempts }, 'Máximo de reconexiones alcanzado');
+          // Incluso tras agotar intentos, programar un reintento largo (5 min)
+          this.logger.error({ attempts: this.reconnectAttempts }, 'Máximo de reconexiones alcanzado — reintentando en 5 min');
+          this.reconnectAttempts = 0;
+          this.reconnectTimer = setTimeout(() => this.connect(), 5 * 60_000);
           await this._updateSessionStatus({
             sesionValida: false,
             servidorActivo: true,
-            errorDesconexion: `Sin conexión tras ${this.reconnectAttempts} intentos. Usa "Nuevo QR".`,
+            errorDesconexion: `Reconectando automáticamente...`,
           });
         }
       } else if (reason === DisconnectReason.loggedOut) {
@@ -272,20 +286,6 @@ export class SessionManager {
           qrImagenBase64: null,
           numeroConectado: null,
           errorLogout: `Sesión rechazada (${this.loggedOutAttempts}x). Presiona "Solicitar QR" para reintentar.`,
-        });
-      } else {
-        // 403 forbidden, 500 badSession, 411 multideviceMismatch → error manual
-        this.logger.error({ reason }, 'Error permanente — acción manual requerida');
-        this._clearSessionFiles();
-        await clearSessionBackup();
-        await this._updateSessionStatus({
-          sesionValida: false,
-          servidorActivo: true,
-          qrPendiente: false,
-          qrString: null,
-          qrImagenBase64: null,
-          numeroConectado: null,
-          errorLogout: `Sesión inválida (código ${reason}). Usa "Nuevo QR" para vincular de nuevo.`,
         });
       }
     }
@@ -417,6 +417,45 @@ export class SessionManager {
       clearInterval(this.heartbeatTimer);
       this.heartbeatTimer = null;
     }
+    this._stopConnectionWatchdog();
+  }
+
+  // Detecta conexiones "zombie" donde el WebSocket murió sin que Baileys lo notara
+  _startConnectionWatchdog() {
+    this._stopConnectionWatchdog();
+    const WATCHDOG_INTERVAL = 60_000; // Revisar cada minuto
+    const MAX_SILENCE = 3 * 60_000;   // 3 minutos sin actividad = reconectar
+
+    this.connectionWatchdog = setInterval(async () => {
+      if (!this.isConnected) return;
+
+      const silenceMs = Date.now() - this.lastSocketActivity;
+      if (silenceMs > MAX_SILENCE) {
+        this.logger.warn(
+          { silenceMs, maxSilence: MAX_SILENCE },
+          'Watchdog: conexión zombie detectada — forzando reconexión'
+        );
+        this._stopConnectionWatchdog();
+
+        if (this.sock) {
+          try { this.sock.ev.removeAllListeners(); } catch (_) {}
+          try { this.sock.ws?.close(); } catch (_) {}
+          this.sock = null;
+        }
+        this.isConnected = false;
+        this._stopHeartbeat();
+        this.reconnectAttempts = 0;
+        this.isConnecting = false;
+        setTimeout(() => this.connect(), 2000);
+      }
+    }, WATCHDOG_INTERVAL);
+  }
+
+  _stopConnectionWatchdog() {
+    if (this.connectionWatchdog) {
+      clearInterval(this.connectionWatchdog);
+      this.connectionWatchdog = null;
+    }
   }
 
   async _updateSessionStatus(fields) {
@@ -459,8 +498,13 @@ export class SessionManager {
     this._stopHeartbeat();
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
     if (this.sock) {
-      await this.sock.logout().catch(() => {});
+      // IMPORTANTE: solo cerrar el WebSocket, NUNCA logout().
+      // logout() invalida las credenciales permanentemente y obliga a escanear QR de nuevo.
+      try { this.sock.ev.removeAllListeners(); } catch (_) {}
+      try { this.sock.ws?.close(); } catch (_) {}
+      this.sock = null;
     }
+    await saveSessionBackup(this.sessionDir).catch(() => {});
     await this._updateSessionStatus({ servidorActivo: false, sesionValida: false });
   }
 }
